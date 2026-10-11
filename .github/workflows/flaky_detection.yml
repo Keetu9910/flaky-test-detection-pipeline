@@ -61,6 +61,12 @@ jobs:
       matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
 
     steps:
+      - name: Start Job Clock
+        run: |
+          JOB_TIMEOUT=${{ github.event.inputs.max_job_timeout != '' && github.event.inputs.max_job_timeout || 20 }}
+          # keep 4 minutes in reserve so the archive/upload step can still run
+          echo "JOB_DEADLINE=$(( $(date +%s) + JOB_TIMEOUT * 60 - 240 ))" >> "$GITHUB_ENV"
+
       - name: Checkout Target Repository
         uses: actions/checkout@v4
         with:
@@ -219,7 +225,12 @@ jobs:
 
           echo "Running NonDex under detected Java ${{ steps.setup-java.outputs.version }} environment..."
 
-          mvn edu.illinois:nondex-maven-plugin:2.2.1:nondex \
+          REMAINING=$(( JOB_DEADLINE - $(date +%s) ))
+          if [ "$REMAINING" -le 60 ]; then echo "No time left for NonDex; skipping."; exit 0; fi
+          NONDEX_BUDGET=$(( REMAINING * 35 / 100 ))
+          echo "NonDex time budget: ${NONDEX_BUDGET}s of ${REMAINING}s remaining"
+
+          timeout --foreground ${NONDEX_BUDGET}s mvn edu.illinois:nondex-maven-plugin:2.2.1:nondex \
             -B -U \
             -DnondexRuns=3 \
             -DnondexMode=FULL \
@@ -242,6 +253,15 @@ jobs:
           cd ${{ matrix.module_path }}
           
           TEST_NAMES="${{ matrix.test_names }}"
+
+          REMAINING=$(( JOB_DEADLINE - $(date +%s) ))
+          STEP_END=$(( $(date +%s) + REMAINING * 50 / 100 ))
+          echo "FlakeSync time budget: $(( REMAINING * 50 / 100 ))s of ${REMAINING}s remaining"
+          fs_mvn() {
+            LEFT=$(( STEP_END - $(date +%s) ))
+            if [ "$LEFT" -le 0 ]; then echo "FlakeSync budget exhausted; skipping: $*"; return 0; fi
+            timeout --foreground ${LEFT}s mvn "$@"
+          }
           
           if [ -n "$TEST_NAMES" ]; then
             IFS=',' read -ra ADDR <<< "$TEST_NAMES"
@@ -249,11 +269,11 @@ jobs:
               echo "=== Running FlakeSync on $TEST_NAME ==="
               
               echo "-> Finding concurrent methods"
-              mvn edu.utexas.ece:flakesync-maven-plugin:1.0-SNAPSHOT:concurrentfind \
+              fs_mvn edu.utexas.ece:flakesync-maven-plugin:1.0-SNAPSHOT:concurrentfind \
                 -Dflakesync.testName="$TEST_NAME" -B -U -Dcheckstyle.skip=true -Drat.skip=true
               
               echo "-> Injecting delays to locate failures"
-              mvn edu.utexas.ece:flakesync-maven-plugin:1.0-SNAPSHOT:delaylocs \
+              fs_mvn edu.utexas.ece:flakesync-maven-plugin:1.0-SNAPSHOT:delaylocs \
                 -Dflakesync.testName="$TEST_NAME" -B -U -Dcheckstyle.skip=true -Drat.skip=true
             done
           else
@@ -275,8 +295,10 @@ jobs:
           mvn -version
           echo "======================================="
 
-          JOB_TIMEOUT=${{ github.event.inputs.max_job_timeout != '' && github.event.inputs.max_job_timeout || 20 }}
-          IDFLAKIES_TIMEOUT=$(( JOB_TIMEOUT > 5 ? JOB_TIMEOUT - 5 : 5 ))m
+          IDFLAKIES_SECS=$(( JOB_DEADLINE - $(date +%s) ))
+          if [ "$IDFLAKIES_SECS" -le 60 ]; then echo "No time left for iDFlakies; skipping."; exit 0; fi
+          IDFLAKIES_TIMEOUT=${IDFLAKIES_SECS}s
+          echo "iDFlakies time budget: $IDFLAKIES_TIMEOUT"
 
           echo "Running iDFlakies under detected Java ${{ steps.setup-java.outputs.version }} environment..."
 
@@ -330,7 +352,6 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts
-          include-hidden-files: true
 
       - name: Run Aggregator Script
         run: python .github/scripts/aggregate_results.py
