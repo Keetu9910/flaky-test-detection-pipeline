@@ -15,6 +15,15 @@ on:
         description: 'Maximum time limit per detection job in minutes (e.g., 15, 30)'
         required: false
         default: '20'
+      force_java_version:
+        description: 'Force one JDK (8, 11 or 17) for every project. Leave empty to auto-detect per project.'
+        required: false
+        default: ''
+      idflakies_java9plus:
+        description: 'Also run iDFlakies on projects that resolve to Java 11/17 (disable if it proves unreliable there)'
+        required: false
+        type: boolean
+        default: true
 
 jobs:
   prepare:
@@ -58,13 +67,28 @@ jobs:
           repository: ${{ matrix.repo_slug }}
           ref: ${{ matrix.sha }}
 
-      - name: Set up Java Environment
-        id: setup-java
+      # Pipeline scripts live in this repo, but the target repo owns the workspace root,
+      # so fetch them into a hidden sub-folder.
+      - name: Checkout Pipeline Scripts
+        uses: actions/checkout@v4
+        with:
+          path: .pipeline-tools
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+
+      - name: Detect Required Java Version
+        id: detect-java
+        env:
+          FORCE_JAVA_VERSION: ${{ github.event.inputs.force_java_version }}
+        run: python3 .pipeline-tools/.github/scripts/detect_java_version.py "${{ matrix.module_path }}"
+
+      # Detection tools are always BUILT with JDK 8 (their own build target); the
+      # project under test is then built/tested with the detected JDK below.
+      - name: Set up JDK 8 (build detection tools)
         uses: actions/setup-java@v4
         with:
           distribution: 'corretto'
-          java-version-file: '${{ github.workspace }}/${{ matrix.module_path }}/pom.xml'
-          java-version: '8' 
+          java-version: '8'
 
       # ==========================================================
       # STRATEGY 1: CONFIGURE CLEAN OFFICIAL REPOSITORY FALLBACKS
@@ -114,17 +138,36 @@ jobs:
       # BUILD AND INSTALL IDFLAKIES MAVEN PLUGIN LOCALLY
       # ==========================================================
       - name: Checkout iDFlakies Repository
-        if: startsWith(steps.setup-java.outputs.version, '8') || startsWith(steps.setup-java.outputs.version, '1.8')
         uses: actions/checkout@v4
         with:
           repository: UT-SE-Research/iDFlakies
           path: idflakies-repo
 
       - name: Build and Install iDFlakies Plugin Locally
-        if: startsWith(steps.setup-java.outputs.version, '8') || startsWith(steps.setup-java.outputs.version, '1.8')
         run: |
           cd idflakies-repo
           mvn clean install -DskipTests -B
+
+      - name: Checkout FlakeSync Repository
+        uses: actions/checkout@v4
+        with:
+          repository: UT-SE-Research/FlakeSync
+          path: flakesync-repo
+
+      - name: Build FlakeSync Plugin Locally
+        run: |
+          cd flakesync-repo
+          mvn clean install -U -DskipTests -B
+
+      # ==========================================================
+      # SWITCH TO THE JDK THE PROJECT UNDER TEST NEEDS (8 / 11 / 17)
+      # ==========================================================
+      - name: Set up Project JDK (${{ steps.detect-java.outputs.java_version }})
+        id: setup-java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'corretto'
+          java-version: ${{ steps.detect-java.outputs.java_version }}
 
       # ==========================================================
       # FORCE ROOT INSTALL PASS FOR MULTI-MODULE BOMs
@@ -153,7 +196,8 @@ jobs:
           {
             "github_url": "${{ matrix.repo_url }}",
             "sha": "${{ matrix.sha }}",
-            "module_path": "${{ matrix.module_path }}"
+            "module_path": "${{ matrix.module_path }}",
+            "java_version": "${{ steps.detect-java.outputs.java_version }}"
           }
           EOF
 
@@ -192,17 +236,6 @@ jobs:
       # ==========================================
       # STEP 2: RUN FLAKESYNC (Targeted & Linear)
       # ==========================================
-      - name: Checkout FlakeSync Repository
-        uses: actions/checkout@v4
-        with:
-          repository: UT-SE-Research/FlakeSync
-          path: flakesync-repo
-
-      - name: Build FlakeSync Plugin Locally
-        run: |
-          cd flakesync-repo
-          mvn clean install -U -DskipTests -B
-
       - name: Run FlakeSync (Concurrent Find & Delay Injection)
         continue-on-error: true
         run: |
@@ -231,7 +264,7 @@ jobs:
       # STEP 3: RUN IDFLAKIES (Moved to Back / Slowest)
       # ==========================================
       - name: Run iDFlakies Detection
-        if: startsWith(steps.setup-java.outputs.version, '8') || startsWith(steps.setup-java.outputs.version, '1.8')
+        if: steps.detect-java.outputs.java_version == '8' || github.event.inputs.idflakies_java9plus != 'false'
         continue-on-error: true
         run: |
           cd ${{ matrix.module_path }}
