@@ -23,10 +23,14 @@ on:
       force_java_version:
         required: false
         type: string
+      max_job_timeout:
+        required: true
+        type: string
 
 jobs:
   detect:
     runs-on: ubuntu-latest
+    timeout-minutes: ${{ fromJson(inputs.max_job_timeout) }}
     steps:
       - name: Checkout Target Repository
         uses: actions/checkout@v4
