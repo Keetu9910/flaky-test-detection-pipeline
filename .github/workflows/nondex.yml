@@ -17,6 +17,12 @@ on:
       repo_url:
         required: true
         type: string
+      test_names: # NOTE: Only flakesync.yml needs this test_names input! Remove it for nondex.yml
+        required: false
+        type: string
+      force_java_version:
+        required: false
+        type: string
 
 jobs:
   detect:
