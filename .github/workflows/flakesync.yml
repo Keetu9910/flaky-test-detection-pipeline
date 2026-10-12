@@ -17,14 +17,14 @@ on:
       repo_url:
         required: true
         type: string
-      test_names: 
+      test_names:
         required: false
         type: string
       force_java_version:
         required: false
         type: string
-      max_job_timeout:       
-        required: true       
+      max_job_timeout:
+        required: true
         type: string
 
 jobs:
@@ -37,7 +37,7 @@ jobs:
         with:
           repository: ${{ inputs.repo_slug }}
           ref: ${{ inputs.sha }}
-          
+
       - name: Checkout FlakeSync Repository
         uses: actions/checkout@v4
         with:
@@ -67,25 +67,12 @@ jobs:
         run: |
           cd ${{ inputs.module_path }}
           mkdir -p logs
+          unset MAVEN_OPTS
+          mvn test-compile -q -B -DskipTests -Dcheckstyle.skip=true -Drat.skip=true -Dmaven.javadoc.skip=true || true
           
-          export JAVA_HOME=$JAVA_HOME_8_X64
-          export PATH=$JAVA_HOME/bin:$PATH
-          TEST_NAMES="${{ inputs.test_names }}"
-          
-          if [ -n "$TEST_NAMES" ]; then
-            IFS=',' read -ra ADDR <<< "$TEST_NAMES"
-            for TEST_NAME in "${ADDR[@]}"; do
-              echo "=== Running FlakeSync on $TEST_NAME ===" 2>&1 | tee -a >(grep -iE "error|flaky|fail|exception" >> logs/flakesync_filtered.log)
-              
-              mvn edu.utexas.ece:flakesync-maven-plugin:1.0-SNAPSHOT:concurrentfind \
-                -Dflakesync.testName="$TEST_NAME" -B -Dcheckstyle.skip=true -Drat.skip=true 2>&1 | tee -a >(grep -iE "error|flaky|fail|exception" >> logs/flakesync_filtered.log)
-                
-              mvn edu.utexas.ece:flakesync-maven-plugin:1.0-SNAPSHOT:delaylocs \
-                -Dflakesync.testName="$TEST_NAME" -B -Dcheckstyle.skip=true -Drat.skip=true 2>&1 | tee -a >(grep -iE "error|flaky|fail|exception" >> logs/flakesync_filtered.log)
-            done
-          else
-            echo "Warning: No test names provided in matrix to run FlakeSync."
-          fi
+          mvn edu.utdallas.cs:flakesync-maven-plugin:1.0.0-SNAPSHOT:detect \
+            -B -Dmaven.test.failure.ignore=true -DfailIfNoTests=false \
+            -Dcheckstyle.skip=true -Drat.skip=true -Dmaven.javadoc.skip=true 2>&1 | tee logs/flakesync_full.log
 
       - name: Archive FlakeSync Results
         uses: actions/upload-artifact@v4
@@ -95,7 +82,6 @@ jobs:
           path: |
             **/run_metadata.json
             **/.flakesync/**
-            **/failing-test-output*/**
           include-hidden-files: true
           retention-days: 7
 
@@ -104,5 +90,5 @@ jobs:
         if: always()
         with:
           name: flakesync_logs_${{ inputs.repo_name }}
-          path: '**/logs/flakesync_filtered.log'
+          path: '**/logs/flakesync_log'
           retention-days: 7
