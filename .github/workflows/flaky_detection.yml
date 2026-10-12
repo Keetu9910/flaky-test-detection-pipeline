@@ -144,10 +144,10 @@ jobs:
           mv nondex_summary.csv nondex/ 2>/dev/null || true
           mv flakesync_td_tests.csv flakesync/ 2>/dev/null || true
           
-          # Move Log Files (assuming your modular scripts name them toolname_logs.txt)
-          find artifacts -name "*idflakies_logs.txt" -exec cp {} idflakies/ \; || true
-          find artifacts -name "*nondex_logs.txt" -exec cp {} nondex/ \; || true
-          find artifacts -name "*flakesync_logs.txt" -exec cp {} flakesync/ \; || true
+          # Use 'find' to flatten and copy logs directly next to the CSVs
+          find artifacts -type f -path "*/idflakies_logs_*/*" -exec cp {} idflakies/ \; || true
+          find artifacts -type f -path "*/nondex_logs_*/*" -exec cp {} nondex/ \; || true
+          find artifacts -type f -path "*/flakesync_logs_*/*" -exec cp {} flakesync/ \; || true
         
       - name: Upload Organized Summaries and Logs
         uses: actions/upload-artifact@v4
