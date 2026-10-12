@@ -20,6 +20,12 @@ on:
       max_job_timeout:
         required: true
         type: string
+      force_java_version:
+        required: false
+        type: string
+      idflakies_java9plus:
+        required: false
+        type: boolean
 
 jobs:
   detect:
@@ -57,7 +63,6 @@ jobs:
         run: |
           cd ${{ inputs.module_path }}
           mkdir -p logs
-          
           unset MAVEN_OPTS
           mvn test-compile -q -B -DskipTests -Dcheckstyle.skip=true -Drat.skip=true -Dmaven.javadoc.skip=true || true
           
