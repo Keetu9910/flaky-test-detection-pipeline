@@ -54,7 +54,6 @@ jobs:
     needs: prepare
     strategy:
       fail-fast: false
-      max-parallel: 10
       matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
     uses: ./.github/workflows/nondex.yml
     with:
@@ -64,6 +63,7 @@ jobs:
       repo_name: ${{ matrix.repo_name }}
       repo_url: ${{ matrix.repo_url }}
       force_java_version: ${{ inputs.force_java_version }}
+      max_job_timeout: ${{ inputs.max_job_timeout != '' && inputs.max_job_timeout || '20' }}
 
   # ==========================================
   # STEP 2: RUN FLAKESYNC
@@ -73,7 +73,6 @@ jobs:
     needs: prepare
     strategy:
       fail-fast: false
-      max-parallel: 10
       matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
     uses: ./.github/workflows/flakesync.yml
     with:
@@ -84,6 +83,7 @@ jobs:
       repo_url: ${{ matrix.repo_url }}
       test_names: ${{ matrix.test_names }}
       force_java_version: ${{ inputs.force_java_version }}
+      max_job_timeout: ${{ inputs.max_job_timeout != '' && inputs.max_job_timeout || '20' }}
 
   # ==========================================
   # STEP 3: RUN IDFLAKIES
@@ -93,7 +93,6 @@ jobs:
     needs: prepare
     strategy:
       fail-fast: false
-      max-parallel: 10
       matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
     uses: ./.github/workflows/idflakies.yml
     with:
@@ -134,30 +133,61 @@ jobs:
       - name: Run Aggregator Script
         run: python .github/scripts/aggregate_results.py
 
-      - name: Organize Artifacts into Folders
+      - name: Organize Artifacts into Main Folders
         run: |
-          # Create main tool folders
-          mkdir -p idflakies nondex flakesync
+          # 1. Create the two main master folders with subfolders for each tool
+          mkdir -p Main_Logs/idflakies Main_Logs/nondex Main_Logs/flakesync
+          mkdir -p Main_Results/idflakies Main_Results/nondex Main_Results/flakesync
+
+          # 2. Copy all raw results into the Main_Results folder
+          cp -r artifacts/*idflakies-results*/* Main_Results/idflakies/ 2>/dev/null || true
+          cp -r artifacts/*nondex-results*/* Main_Results/nondex/ 2>/dev/null || true
+          cp -r artifacts/*flakesync-results*/* Main_Results/flakesync/ 2>/dev/null || true
           
-          # Move Summary Files
-          mv idflakies_summary.csv idflakies/ 2>/dev/null || true
-          mv nondex_summary.csv nondex/ 2>/dev/null || true
-          mv flakesync_td_tests.csv flakesync/ 2>/dev/null || true
-          
-          # Use 'find' to flatten and copy logs directly next to the CSVs
-          find artifacts -type f -path "*/idflakies_logs_*/*" -exec cp {} idflakies/ \; || true
-          find artifacts -type f -path "*/nondex_logs_*/*" -exec cp {} nondex/ \; || true
-          find artifacts -type f -path "*/flakesync_logs_*/*" -exec cp {} flakesync/ \; || true
-        
-      - name: Upload Organized Summaries and Logs
+          # 3. Find and copy all logs into the Main_Logs folder
+          find artifacts -type f -path "*/idflakies_logs_*/*" -exec cp {} Main_Logs/idflakies/ \; || true
+          find artifacts -type f -path "*/nondex_logs_*/*" -exec cp {} Main_Logs/nondex/ \; || true
+          find artifacts -type f -path "*/flakesync_logs_*/*" -exec cp {} Main_Logs/flakesync/ \; || true
+
+      - name: Upload Main Logs
+        uses: actions/upload-artifact@v4
+        with:
+          name: Main_Logs
+          path: Main_Logs/
+          retention-days: 7
+
+      - name: Upload Main Results
+        uses: actions/upload-artifact@v4
+        with:
+          name: Main_Results
+          path: Main_Results/
+          retention-days: 7
+
+      - name: Upload Aggregated Summary CSVs
         uses: actions/upload-artifact@v4
         with:
           name: aggregated_summaries
           path: |
-            idflakies/
-            nondex/
-            flakesync/
+            idflakies_summary.csv
+            nondex_summary.csv
+            flakesync_td_tests.csv
           retention-days: 7
+
+      # ==========================================
+      # CLEANUP: Delete the 500+ intermediate artifacts
+      # ==========================================
+      - name: Clean up UI (Delete Intermediate Artifacts)
+        uses: geekyeggo/delete-artifact@v5
+        with:
+          name: |
+            idflakies-results-*
+            idflakies_logs_*
+            nondex-results-*
+            nondex_logs_*
+            flakesync-results-*
+            flakesync_logs_*
+          useGlob: true
+          failOnError: false
 
   # ==========================================
   # STEP 5: COMPARE WITH IDOFT DATASET
