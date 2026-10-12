@@ -1,5 +1,4 @@
 name: Dynamic Flaky Test Detection Pipeline
-
 on:
   workflow_dispatch:
     inputs:
@@ -34,15 +33,12 @@ jobs:
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.x'
-
       - name: Install Dependencies
         run: pip install pandas
-
       - name: Generate Matrix JSON
         id: set-matrix
         env:
@@ -50,326 +46,154 @@ jobs:
           OFFSET: ${{ github.event.inputs.offset }}
         run: python .github/scripts/generate_matrix.py >> $GITHUB_OUTPUT
 
-  detect:
-    name: ${{ matrix.repo_name }} (${{ matrix.sha }})
+  # ==========================================
+  # STEP 1: RUN NONDEX
+  # ==========================================
+  run_nondex:
+    name: NonDex - ${{ matrix.repo_name }}
     needs: prepare
-    runs-on: ubuntu-latest
-    timeout-minutes: ${{ github.event.inputs.max_job_timeout != '' && fromJson(github.event.inputs.max_job_timeout) || 20 }}
     strategy:
       fail-fast: false
       max-parallel: 10
       matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
+    uses: ./.github/workflows/nondex.yml
+    with:
+      repo_slug: ${{ matrix.repo_slug }}
+      sha: ${{ matrix.sha }}
+      module_path: ${{ matrix.module_path }}
+      repo_name: ${{ matrix.repo_name }}
+      repo_url: ${{ matrix.repo_url }}
+      force_java_version: ${{ inputs.force_java_version }}
 
-    steps:
-      - name: Start Job Clock
-        run: |
-          JOB_TIMEOUT=${{ github.event.inputs.max_job_timeout != '' && github.event.inputs.max_job_timeout || 20 }}
-          # keep 4 minutes in reserve so the archive/upload step can still run
-          echo "JOB_DEADLINE=$(( $(date +%s) + JOB_TIMEOUT * 60 - 240 ))" >> "$GITHUB_ENV"
+  # ==========================================
+  # STEP 2: RUN FLAKESYNC
+  # ==========================================
+  run_flakesync:
+    name: FlakeSync - ${{ matrix.repo_name }}
+    needs: prepare
+    strategy:
+      fail-fast: false
+      max-parallel: 10
+      matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
+    uses: ./.github/workflows/flakesync.yml
+    with:
+      repo_slug: ${{ matrix.repo_slug }}
+      sha: ${{ matrix.sha }}
+      module_path: ${{ matrix.module_path }}
+      repo_name: ${{ matrix.repo_name }}
+      repo_url: ${{ matrix.repo_url }}
+      test_names: ${{ matrix.test_names }}
+      force_java_version: ${{ inputs.force_java_version }}
 
-      - name: Checkout Target Repository
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ matrix.repo_slug }}
-          ref: ${{ matrix.sha }}
+  # ==========================================
+  # STEP 3: RUN IDFLAKIES
+  # ==========================================
+  run_idflakies:
+    name: iDFlakies - ${{ matrix.repo_name }}
+    needs: prepare
+    strategy:
+      fail-fast: false
+      max-parallel: 10
+      matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
+    uses: ./.github/workflows/idflakies.yml
+    with:
+      repo_slug: ${{ matrix.repo_slug }}
+      sha: ${{ matrix.sha }}
+      module_path: ${{ matrix.module_path }}
+      repo_name: ${{ matrix.repo_name }}
+      repo_url: ${{ matrix.repo_url }}
+      max_job_timeout: ${{ inputs.max_job_timeout != '' && inputs.max_job_timeout || '20' }}
+      force_java_version: ${{ inputs.force_java_version }}
+      idflakies_java9plus: ${{ inputs.idflakies_java9plus }}
 
-      # Pipeline scripts live in this repo, but the target repo owns the workspace root,
-      # so fetch them into a hidden sub-folder.
-      - name: Checkout Pipeline Scripts
-        uses: actions/checkout@v4
-        with:
-          path: .pipeline-tools
-          sparse-checkout: .github/scripts
-          sparse-checkout-cone-mode: false
-
-      - name: Detect Required Java Version
-        id: detect-java
-        env:
-          FORCE_JAVA_VERSION: ${{ github.event.inputs.force_java_version }}
-        run: python3 .pipeline-tools/.github/scripts/detect_java_version.py "${{ matrix.module_path }}"
-
-      # Detection tools are always BUILT with JDK 8 (their own build target); the
-      # project under test is then built/tested with the detected JDK below.
-      - name: Set up JDK 8 (build detection tools)
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'corretto'
-          java-version: '8'
-
-      # ==========================================================
-      # STRATEGY 1: CONFIGURE CLEAN OFFICIAL REPOSITORY FALLBACKS
-      # ==========================================================
-      - name: Configure Clean Global Maven Repositories
-        run: |
-          rm -rf ~/.m2
-          mkdir -p ~/.m2
-          cat <<EOF > ~/.m2/settings.xml
-          <settings xmlns="http://maven.apache.org/SETTINGS/1.0.0"
-                    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-                    xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.0.0 https://maven.apache.org/xsd/settings-1.0.0.xsd">
-            <profiles>
-              <profile>
-                <id>fallback-snapshots-profile</id>
-                <activation>
-                  <activeByDefault>true</activeByDefault>
-                </activation>
-                <repositories>
-                  <repository>
-                    <id>apache-snapshots-repo</id>
-                    <url>https://repository.apache.org/snapshots/</url>
-                    <snapshots><enabled>true</enabled></snapshots>
-                    <releases><enabled>false</enabled></releases>
-                  </repository>
-                  <repository>
-                    <id>ossrh-snapshots-repo</id>
-                    <url>https://oss.sonatype.org/content/repositories/snapshots/</url>
-                    <snapshots><enabled>true</enabled></snapshots>
-                    <releases><enabled>false</enabled></releases>
-                  </repository>
-                </repositories>
-                <pluginRepositories>
-                  <pluginRepository>
-                    <id>apache-plugin-snapshots-repo</id>
-                    <url>https://repository.apache.org/snapshots/</url>
-                    <snapshots><enabled>true</enabled></snapshots>
-                    <releases><enabled>false</enabled></releases>
-                  </pluginRepository>
-                </pluginRepositories>
-              </profile>
-            </profiles>
-          </settings>
-          EOF
-
-      # ==========================================================
-      # BUILD AND INSTALL IDFLAKIES MAVEN PLUGIN LOCALLY
-      # ==========================================================
-      - name: Checkout iDFlakies Repository
-        uses: actions/checkout@v4
-        with:
-          repository: UT-SE-Research/iDFlakies
-          path: idflakies-repo
-
-      - name: Build and Install iDFlakies Plugin Locally
-        run: |
-          cd idflakies-repo
-          mvn clean install -DskipTests -B
-
-      - name: Checkout FlakeSync Repository
-        uses: actions/checkout@v4
-        with:
-          repository: UT-SE-Research/FlakeSync
-          path: flakesync-repo
-
-      - name: Build FlakeSync Plugin Locally
-        run: |
-          cd flakesync-repo
-          mvn clean install -U -DskipTests -B
-
-      # ==========================================================
-      # SWITCH TO THE JDK THE PROJECT UNDER TEST NEEDS (8 / 11 / 17)
-      # ==========================================================
-      - name: Set up Project JDK (${{ steps.detect-java.outputs.java_version }})
-        id: setup-java
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'corretto'
-          java-version: ${{ steps.detect-java.outputs.java_version }}
-
-      # ==========================================================
-      # FORCE ROOT INSTALL PASS FOR MULTI-MODULE BOMs
-      # ==========================================================
-      - name: Force Global Dependency & Multi-Module Local Resolution
-        continue-on-error: true
-        run: |
-          echo "=== INSTALLING ROOT & PARENT POMS TO LOCAL M2 ==="
-          mvn clean install -B -U -DskipTests -Dcheckstyle.skip=true -Drat.skip=true -Dmaven.javadoc.skip=true || true
-          
-          if [ "${{ matrix.module_path }}" != "." ]; then
-            echo "=== PRE-BUILDING TARGET SUBMODULE: ${{ matrix.module_path }} ==="
-            cd ${{ matrix.module_path }}
-            mvn test-compile -B -Dcheckstyle.skip=true -Drat.skip=true -Dmaven.javadoc.skip=true || true
-          fi
-
-      - name: Save Run Metadata & Pre-create Output Directories
-        run: |
-          mkdir -p .output_metadata .dtfixingtools .nondex
-          mkdir -p ${{ matrix.module_path }}/.output_metadata ${{ matrix.module_path }}/.dtfixingtools ${{ matrix.module_path }}/.nondex
-
-          touch .dtfixingtools/.keep .nondex/.keep
-          touch ${{ matrix.module_path }}/.dtfixingtools/.keep ${{ matrix.module_path }}/.nondex/.keep
-
-          cat <<EOF > .output_metadata/run_metadata.json
-          {
-            "github_url": "${{ matrix.repo_url }}",
-            "sha": "${{ matrix.sha }}",
-            "module_path": "${{ matrix.module_path }}",
-            "java_version": "${{ steps.detect-java.outputs.java_version }}"
-          }
-          EOF
-
-          if [ "${{ matrix.module_path }}" != "." ]; then
-            cp .output_metadata/run_metadata.json ${{ matrix.module_path }}/.output_metadata/run_metadata.json
-          fi
-
-      # ==========================================
-      # STEP 1: RUN NONDEX (Fastest, API-focused)
-      # ==========================================
-      - name: Run NonDex Detection
-        continue-on-error: true
-        run: |
-          cd ${{ matrix.module_path }}
-          
-          echo "=== VERIFYING NONDEX JVM RUNTIME ==="
-          java -version
-          echo "===================================="
-
-          echo "Running NonDex under detected Java ${{ steps.setup-java.outputs.version }} environment..."
-
-          REMAINING=$(( JOB_DEADLINE - $(date +%s) ))
-          if [ "$REMAINING" -le 60 ]; then echo "No time left for NonDex; skipping."; exit 0; fi
-          NONDEX_BUDGET=$(( REMAINING * 35 / 100 ))
-          echo "NonDex time budget: ${NONDEX_BUDGET}s of ${REMAINING}s remaining"
-
-          timeout --foreground ${NONDEX_BUDGET}s mvn edu.illinois:nondex-maven-plugin:2.2.1:nondex \
-            -B -U \
-            -DnondexRuns=3 \
-            -DnondexMode=FULL \
-            -DreuseForks=true \
-            -DforkCount=1 \
-            -DargLine="" \
-            -Dmaven.test.failure.ignore=true \
-            -DfailIfNoTests=false \
-            -Dorg.slf4j.simpleLogger.defaultLogLevel=warn \
-            -Dcheckstyle.skip=true \
-            -Drat.skip=true \
-            -Dmaven.javadoc.skip=true
-
-      # ==========================================
-      # STEP 2: RUN FLAKESYNC (Targeted & Linear)
-      # ==========================================
-      - name: Run FlakeSync (Concurrent Find & Delay Injection)
-        continue-on-error: true
-        run: |
-          cd ${{ matrix.module_path }}
-          
-          TEST_NAMES="${{ matrix.test_names }}"
-
-          REMAINING=$(( JOB_DEADLINE - $(date +%s) ))
-          STEP_END=$(( $(date +%s) + REMAINING * 50 / 100 ))
-          echo "FlakeSync time budget: $(( REMAINING * 50 / 100 ))s of ${REMAINING}s remaining"
-          fs_mvn() {
-            LEFT=$(( STEP_END - $(date +%s) ))
-            if [ "$LEFT" -le 0 ]; then echo "FlakeSync budget exhausted; skipping: $*"; return 0; fi
-            timeout --foreground ${LEFT}s mvn "$@"
-          }
-          
-          if [ -n "$TEST_NAMES" ]; then
-            IFS=',' read -ra ADDR <<< "$TEST_NAMES"
-            for TEST_NAME in "${ADDR[@]}"; do
-              echo "=== Running FlakeSync on $TEST_NAME ==="
-              
-              echo "-> Finding concurrent methods"
-              fs_mvn edu.utexas.ece:flakesync-maven-plugin:1.0-SNAPSHOT:concurrentfind \
-                -Dflakesync.testName="$TEST_NAME" -B -U -Dcheckstyle.skip=true -Drat.skip=true
-              
-              echo "-> Injecting delays to locate failures"
-              fs_mvn edu.utexas.ece:flakesync-maven-plugin:1.0-SNAPSHOT:delaylocs \
-                -Dflakesync.testName="$TEST_NAME" -B -U -Dcheckstyle.skip=true -Drat.skip=true
-            done
-          else
-            echo "Warning: No test names provided in matrix to run FlakeSync."
-          fi
-
-      # ==========================================
-      # STEP 3: RUN IDFLAKIES (Moved to Back / Slowest)
-      # ==========================================
-      - name: Run iDFlakies Detection
-        if: steps.detect-java.outputs.java_version == '8' || github.event.inputs.idflakies_java9plus != 'false'
-        continue-on-error: true
-        run: |
-          cd ${{ matrix.module_path }}
-          unset MAVEN_OPTS
-          
-          echo "=== VERIFYING IDFLAKIES JVM RUNTIME ==="
-          java -version
-          mvn -version
-          echo "======================================="
-
-          IDFLAKIES_SECS=$(( JOB_DEADLINE - $(date +%s) ))
-          if [ "$IDFLAKIES_SECS" -le 60 ]; then echo "No time left for iDFlakies; skipping."; exit 0; fi
-          IDFLAKIES_TIMEOUT=${IDFLAKIES_SECS}s
-          echo "iDFlakies time budget: $IDFLAKIES_TIMEOUT"
-
-          echo "Running iDFlakies under detected Java ${{ steps.setup-java.outputs.version }} environment..."
-
-          timeout --foreground $IDFLAKIES_TIMEOUT mvn edu.illinois.cs:idflakies-maven-plugin:2.0.0:detect \
-            -B -U \
-            -Dstyle.color=always \
-            -Ddetector.detector_type=random-class-method \
-            -Ddt.randomize.rounds=10 \
-            -Ddt.detector.original_order.all_must_pass=false \
-            -Ddt.detector.original_order.retry_count=3 \
-            -Dmaven.test.failure.ignore=true \
-            -DfailIfNoTests=false \
-            -Dcheckstyle.skip=true \
-            -Drat.skip=true \
-            -Dmaven.javadoc.skip=true
-
-      # ==========================================
-      # STEP 4: COMBINED UNIFIED ARCHIVAL
-      # ==========================================
-      - name: Archive All Tool Results
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: results-${{ matrix.repo_name }}-${{ matrix.sha }}
-          path: |
-            **/run_metadata.json
-            **/.dtfixingtools/**
-            **/.nondex/**
-            **/.flakesync/**
-            **/failing-test-output*/**
-          include-hidden-files: true
-          if-no-files-found: ignore
-          retention-days: 7
-
+  # ==========================================
+  # STEP 4: COMBINED UNIFIED ARCHIVAL & AGGREGATION
+  # ==========================================
   aggregate:
-    name: Aggregate Summary CSVs
-    needs: detect
+    name: Aggregate CSVs
+    needs: [run_idflakies, run_nondex, run_flakesync]
     if: always()
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
-
+        
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.x'
-
-      - name: Download All Runner Artifacts
+          
+      - name: Install Pandas
+        run: pip install pandas
+        
+      - name: Download Tool Artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts
-
+          
       - name: Run Aggregator Script
         run: python .github/scripts/aggregate_results.py
 
-      - name: Upload iDFlakies Summary CSV
+      - name: Organize Artifacts into Folders
+        run: |
+          # Create main tool folders
+          mkdir -p idflakies nondex flakesync
+          
+          # Move Summary Files
+          mv idflakies_summary.csv idflakies/ 2>/dev/null || true
+          mv nondex_summary.csv nondex/ 2>/dev/null || true
+          mv flakesync_td_tests.csv flakesync/ 2>/dev/null || true
+          
+          # Move Log Files (assuming your modular scripts name them toolname_logs.txt)
+          find artifacts -name "*idflakies_logs.txt" -exec cp {} idflakies/ \; || true
+          find artifacts -name "*nondex_logs.txt" -exec cp {} nondex/ \; || true
+          find artifacts -name "*flakesync_logs.txt" -exec cp {} flakesync/ \; || true
+        
+      - name: Upload Organized Summaries and Logs
         uses: actions/upload-artifact@v4
         with:
-          name: idflakies_summary_csv
-          path: idflakies_summary.csv
+          name: aggregated_summaries
+          path: |
+            idflakies/
+            nondex/
+            flakesync/
+          retention-days: 7
 
-      - name: Upload NonDex Summary CSV
-        uses: actions/upload-artifact@v4
+  # ==========================================
+  # STEP 5: COMPARE WITH IDOFT DATASET
+  # ==========================================
+  compare:
+    name: Compare with IDoFT Dataset
+    needs: aggregate
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          name: nondex_summary_csv
-          path: nondex_summary.csv
+          python-version: '3.x'
+          
+      - name: Install Pandas
+        run: pip install pandas
 
-      - name: Upload FlakeSync TD Tests CSV
+      - name: Download Aggregated Summaries
+        uses: actions/download-artifact@v4
+        with:
+          name: aggregated_summaries
+          path: .
+          
+      - name: Download Latest IDoFT Dataset (pr-data.csv)
+        run: curl -sSL https://raw.githubusercontent.com/TestingResearchIllinois/idoft/main/pr-data.csv -o pr-data.csv
+        
+      - name: Compare with IDoFT Dataset
+        run: python .github/scripts/compare_idoft.py
+        
+      - name: Upload Unique Flaky Tests Report
         uses: actions/upload-artifact@v4
         with:
-          name: flakesync_td_tests_csv
-          path: flakesync_td_tests.csv
+          name: unique_tests_report
+          path: unique_tests.txt
+          retention-days: 7
