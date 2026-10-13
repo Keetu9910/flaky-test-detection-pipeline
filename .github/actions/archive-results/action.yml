@@ -2,7 +2,7 @@ name: Archive detector results and logs
 description: >
   Uploads the run metadata plus the tool's result files, and the tool's log, as
   artifacts named so the aggregate job can find them
-  (TOOL-results-REPO-SHA and TOOL_logs_REPO).
+  (TOOL-results-REPO-SHA and TOOL_logs_REPO_SHA).
 
 inputs:
   tool:
