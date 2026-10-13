@@ -28,7 +28,7 @@ on:
         type: string
 
 jobs:
-  flakesync:
+  detect:
     runs-on: ubuntu-latest
     timeout-minutes: ${{ fromJson(inputs.max_job_timeout) }}
     steps:
@@ -38,56 +38,47 @@ jobs:
           repository: ${{ inputs.repo_slug }}
           ref: ${{ inputs.sha }}
 
-      - name: Checkout Pipeline Scripts
+      # The target repo owns the workspace root, so the shared actions live in a hidden sub-folder.
+      - name: Checkout Pipeline Actions
         uses: actions/checkout@v4
         with:
           path: .pipeline-tools
-          sparse-checkout: |
-            .github/scripts
-            .github/actions
+          sparse-checkout: .github/actions
           sparse-checkout-cone-mode: false
 
-      # Builds the FlakeSync plugin (replaces the old checkout + build steps here)
-      - name: Setup Project Under Test
-        id: setup
-        uses: ./.pipeline-tools/.github/actions/setup-project
+      - name: Checkout FlakeSync Repository
+        uses: actions/checkout@v4
         with:
-          repo_slug: ${{ inputs.repo_slug }}
+          repository: UT-SE-Research/FlakeSync
+          path: flakesync-repo
+
+      - name: Build FlakeSync Plugin Locally
+        run: |
+          cd flakesync-repo
+          export JAVA_HOME=$JAVA_HOME_8_X64
+          export PATH=$JAVA_HOME/bin:$PATH
+          mvn clean install -U -DskipTests
+
+      - name: Save Run Metadata
+        uses: ./.pipeline-tools/.github/actions/save-metadata
+        with:
+          repo-url: ${{ inputs.repo_url }}
           sha: ${{ inputs.sha }}
-          module_path: ${{ inputs.module_path }}
-          repo_url: ${{ inputs.repo_url }}
-          force_java_version: ${{ inputs.force_java_version }}
-          max_job_timeout: ${{ inputs.max_job_timeout }}
-          build_idflakies: 'false'
-          build_flakesync: 'true'
+          module-path: ${{ inputs.module_path }}
 
       - name: Run FlakeSync
         continue-on-error: true
-        run: |
-          cd ${{ inputs.module_path }}
-          mkdir -p logs
-          unset MAVEN_OPTS
-          mvn test-compile -q -B -DskipTests -Dcheckstyle.skip=true -Drat.skip=true -Dmaven.javadoc.skip=true || true
-          
-          mvn edu.utdallas.cs:flakesync-maven-plugin:1.0.0-SNAPSHOT:detect \
-            -B -Dmaven.test.failure.ignore=true -DfailIfNoTests=false \
-            -Dcheckstyle.skip=true -Drat.skip=true -Dmaven.javadoc.skip=true 2>&1 | tee logs/flakesync_log.txt || true
-
-      - name: Archive FlakeSync Results
-        uses: actions/upload-artifact@v4
-        if: always()
+        uses: ./.pipeline-tools/.github/actions/run-detector
         with:
-          name: flakesync-results-${{ inputs.repo_name }}-${{ inputs.sha }}
-          path: |
-            **/run_metadata.json
-            **/.flakesync/**
-          include-hidden-files: true
-          retention-days: 7
+          tool: flakesync
+          module-path: ${{ inputs.module_path }}
+          mvn-args: edu.utdallas.cs:flakesync-maven-plugin:1.0.0-SNAPSHOT:detect
 
-      - name: Archive FlakeSync Logs
-        uses: actions/upload-artifact@v4
+      - name: Archive FlakeSync Results and Logs
         if: always()
+        uses: ./.pipeline-tools/.github/actions/archive-results
         with:
-          name: flakesync_logs_${{ inputs.repo_name }}
-          path: '**/logs/flakesync_log.txt'
-          retention-days: 7
+          tool: flakesync
+          repo-name: ${{ inputs.repo_name }}
+          sha: ${{ inputs.sha }}
+          results-glob: '**/.flakesync/**'
