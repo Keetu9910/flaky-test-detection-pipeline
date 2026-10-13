@@ -1,6 +1,6 @@
 # Automated Flaky Test Detection Pipeline for iDFlakies, NonDex, and FlakeSync
 ###### Originally Authored By: Your favorite loaf, Loafyy
-###### Contributors: Samuel Song
+###### Contributors: Samuel Song, Srujana Ponduri
 
 ## 📌 Overview
 This repository provides an automated, scalable GitHub Actions pipeline designed to detect flaky tests across **Maven-based Java 8 projects** in the IDoFT dataset (`pr-data.csv`).
