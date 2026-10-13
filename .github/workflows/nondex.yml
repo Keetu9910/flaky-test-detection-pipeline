@@ -25,7 +25,7 @@ on:
         type: string
 
 jobs:
-  nondex:
+  detect:
     runs-on: ubuntu-latest
     timeout-minutes: ${{ fromJson(inputs.max_job_timeout) }}
     steps:
@@ -35,55 +35,42 @@ jobs:
           repository: ${{ inputs.repo_slug }}
           ref: ${{ inputs.sha }}
 
-      - name: Checkout Pipeline Scripts
+      # The target repo owns the workspace root, so the shared actions live in a hidden sub-folder.
+      - name: Checkout Pipeline Actions
         uses: actions/checkout@v4
         with:
           path: .pipeline-tools
-          sparse-checkout: |
-            .github/scripts
-            .github/actions
+          sparse-checkout: .github/actions
           sparse-checkout-cone-mode: false
 
-      - name: Setup Project Under Test
-        id: setup
-        uses: ./.pipeline-tools/.github/actions/setup-project
+      - name: Set up Java Environment
+        id: setup-java
+        uses: actions/setup-java@v4
         with:
-          repo_slug: ${{ inputs.repo_slug }}
+          distribution: 'corretto'
+          java-version-file: '${{ github.workspace }}/${{ inputs.module_path }}/pom.xml'
+          java-version: '8'
+
+      - name: Save Run Metadata
+        uses: ./.pipeline-tools/.github/actions/save-metadata
+        with:
+          repo-url: ${{ inputs.repo_url }}
           sha: ${{ inputs.sha }}
-          module_path: ${{ inputs.module_path }}
-          repo_url: ${{ inputs.repo_url }}
-          force_java_version: ${{ inputs.force_java_version }}
-          max_job_timeout: ${{ inputs.max_job_timeout }}
-          build_idflakies: 'false'
-          build_flakesync: 'false'
+          module-path: ${{ inputs.module_path }}
 
       - name: Run NonDex
         continue-on-error: true
-        run: |
-          cd ${{ inputs.module_path }}
-          mkdir -p logs
-          unset MAVEN_OPTS
-          mvn test-compile -q -B -DskipTests -Dcheckstyle.skip=true -Drat.skip=true -Dmaven.javadoc.skip=true || true
-          
-          mvn edu.illinois.cs:nondex-maven-plugin:2.1.7:nondex \
-            -B -Dmaven.test.failure.ignore=true -DfailIfNoTests=false \
-            -Dcheckstyle.skip=true -Drat.skip=true -Dmaven.javadoc.skip=true 2>&1 | tee logs/nondex_log.txt || true
-
-      - name: Archive NonDex Results
-        uses: actions/upload-artifact@v4
-        if: always()
+        uses: ./.pipeline-tools/.github/actions/run-detector
         with:
-          name: nondex-results-${{ inputs.repo_name }}-${{ inputs.sha }}
-          path: |
-            **/run_metadata.json
-            **/.nondex/**
-          include-hidden-files: true
-          retention-days: 7
+          tool: nondex
+          module-path: ${{ inputs.module_path }}
+          mvn-args: edu.illinois.cs:nondex-maven-plugin:2.1.7:nondex
 
-      - name: Archive NonDex Logs
-        uses: actions/upload-artifact@v4
+      - name: Archive NonDex Results and Logs
         if: always()
+        uses: ./.pipeline-tools/.github/actions/archive-results
         with:
-          name: nondex_logs_${{ inputs.repo_name }}
-          path: '**/logs/nondex_log.txt'
-          retention-days: 7
+          tool: nondex
+          repo-name: ${{ inputs.repo_name }}
+          sha: ${{ inputs.sha }}
+          results-glob: '**/.nondex/**'
