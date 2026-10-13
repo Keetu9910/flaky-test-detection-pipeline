@@ -15,9 +15,9 @@ if not idoft_df.empty:
         idoft_tests = set(idoft_df['Fully-Qualified Test Name (packageName.ClassName.methodName)'].dropna())
 
 # Load detected data from the newly organized folders
-idflakies_df = load_data('idflakies/idflakies_summary.csv')
-nondex_df = load_data('nondex/nondex_summary.csv')
-flakesync_df = load_data('flakesync/flakesync_td_tests.csv')
+idflakies_df = load_data('idflakies_summary.csv')
+nondex_df = load_data('nondex_summary.csv')
+flakesync_df = load_data('flakesync_td_tests.csv')
 
 # Calculate total detected
 idflakies_total = len(idflakies_df) if not idflakies_df.empty else 0
