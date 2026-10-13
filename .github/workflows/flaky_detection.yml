@@ -33,18 +33,182 @@ jobs:
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.x'
+
       - name: Install Dependencies
         run: pip install pandas
+
       - name: Generate Matrix JSON
         id: set-matrix
         env:
           MAX_RUNS: ${{ github.event.inputs.max_projects }}
           OFFSET: ${{ github.event.inputs.offset }}
         run: python .github/scripts/generate_matrix.py >> $GITHUB_OUTPUT
+
+  detect:
+    name: ${{ matrix.repo_name }} (${{ matrix.sha }})
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ github.event.inputs.max_job_timeout != '' && fromJson(github.event.inputs.max_job_timeout) || 20 }}
+    strategy:
+      fail-fast: false
+      max-parallel: 10
+      matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
+
+    steps:
+      - name: Start Job Clock
+        run: |
+          JOB_TIMEOUT=${{ github.event.inputs.max_job_timeout != '' && github.event.inputs.max_job_timeout || 20 }}
+          # keep 4 minutes in reserve so the archive/upload step can still run
+          echo "JOB_DEADLINE=$(( $(date +%s) + JOB_TIMEOUT * 60 - 240 ))" >> "$GITHUB_ENV"
+
+      - name: Checkout Target Repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ matrix.repo_slug }}
+          ref: ${{ matrix.sha }}
+
+      # Pipeline scripts live in this repo, but the target repo owns the workspace root,
+      # so fetch them into a hidden sub-folder.
+      - name: Checkout Pipeline Scripts
+        uses: actions/checkout@v4
+        with:
+          path: .pipeline-tools
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+
+      - name: Detect Required Java Version
+        id: detect-java
+        env:
+          FORCE_JAVA_VERSION: ${{ github.event.inputs.force_java_version }}
+        run: python3 .pipeline-tools/.github/scripts/detect_java_version.py "${{ matrix.module_path }}"
+
+      # Detection tools are always BUILT with JDK 8 (their own build target); the
+      # project under test is then built/tested with the detected JDK below.
+      - name: Set up JDK 8 (build detection tools)
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'corretto'
+          java-version: '8'
+
+      # ==========================================================
+      # STRATEGY 1: CONFIGURE CLEAN OFFICIAL REPOSITORY FALLBACKS
+      # ==========================================================
+      - name: Configure Clean Global Maven Repositories
+        run: |
+          rm -rf ~/.m2
+          mkdir -p ~/.m2
+          cat <<EOF > ~/.m2/settings.xml
+          <settings xmlns="http://maven.apache.org/SETTINGS/1.0.0"
+                    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                    xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.0.0 https://maven.apache.org/xsd/settings-1.0.0.xsd">
+            <profiles>
+              <profile>
+                <id>fallback-snapshots-profile</id>
+                <activation>
+                  <activeByDefault>true</activeByDefault>
+                </activation>
+                <repositories>
+                  <repository>
+                    <id>apache-snapshots-repo</id>
+                    <url>https://repository.apache.org/snapshots/</url>
+                    <snapshots><enabled>true</enabled></snapshots>
+                    <releases><enabled>false</enabled></releases>
+                  </repository>
+                  <repository>
+                    <id>ossrh-snapshots-repo</id>
+                    <url>https://oss.sonatype.org/content/repositories/snapshots/</url>
+                    <snapshots><enabled>true</enabled></snapshots>
+                    <releases><enabled>false</enabled></releases>
+                  </repository>
+                </repositories>
+                <pluginRepositories>
+                  <pluginRepository>
+                    <id>apache-plugin-snapshots-repo</id>
+                    <url>https://repository.apache.org/snapshots/</url>
+                    <snapshots><enabled>true</enabled></snapshots>
+                    <releases><enabled>false</enabled></releases>
+                  </pluginRepository>
+                </pluginRepositories>
+              </profile>
+            </profiles>
+          </settings>
+          EOF
+
+      # ==========================================================
+      # BUILD AND INSTALL IDFLAKIES MAVEN PLUGIN LOCALLY
+      # ==========================================================
+      - name: Checkout iDFlakies Repository
+        uses: actions/checkout@v4
+        with:
+          repository: UT-SE-Research/iDFlakies
+          path: idflakies-repo
+
+      - name: Build and Install iDFlakies Plugin Locally
+        run: |
+          cd idflakies-repo
+          mvn clean install -DskipTests -B
+
+      - name: Checkout FlakeSync Repository
+        uses: actions/checkout@v4
+        with:
+          repository: UT-SE-Research/FlakeSync
+          path: flakesync-repo
+
+      - name: Build FlakeSync Plugin Locally
+        run: |
+          cd flakesync-repo
+          mvn clean install -U -DskipTests -B
+
+      # ==========================================================
+      # SWITCH TO THE JDK THE PROJECT UNDER TEST NEEDS (8 / 11 / 17)
+      # ==========================================================
+      - name: Set up Project JDK (${{ steps.detect-java.outputs.java_version }})
+        id: setup-java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'corretto'
+          java-version: ${{ steps.detect-java.outputs.java_version }}
+
+      # ==========================================================
+      # FORCE ROOT INSTALL PASS FOR MULTI-MODULE BOMs
+      # ==========================================================
+      - name: Force Global Dependency & Multi-Module Local Resolution
+        continue-on-error: true
+        run: |
+          echo "=== INSTALLING ROOT & PARENT POMS TO LOCAL M2 ==="
+          mvn clean install -B -U -DskipTests -Dcheckstyle.skip=true -Drat.skip=true -Dmaven.javadoc.skip=true || true
+          
+          if [ "${{ matrix.module_path }}" != "." ]; then
+            echo "=== PRE-BUILDING TARGET SUBMODULE: ${{ matrix.module_path }} ==="
+            cd ${{ matrix.module_path }}
+            mvn test-compile -B -Dcheckstyle.skip=true -Drat.skip=true -Dmaven.javadoc.skip=true || true
+          fi
+
+      - name: Save Run Metadata & Pre-create Output Directories
+        run: |
+          mkdir -p .output_metadata .dtfixingtools .nondex
+          mkdir -p ${{ matrix.module_path }}/.output_metadata ${{ matrix.module_path }}/.dtfixingtools ${{ matrix.module_path }}/.nondex
+
+          touch .dtfixingtools/.keep .nondex/.keep
+          touch ${{ matrix.module_path }}/.dtfixingtools/.keep ${{ matrix.module_path }}/.nondex/.keep
+
+          cat <<EOF > .output_metadata/run_metadata.json
+          {
+            "github_url": "${{ matrix.repo_url }}",
+            "sha": "${{ matrix.sha }}",
+            "module_path": "${{ matrix.module_path }}",
+            "java_version": "${{ steps.detect-java.outputs.java_version }}"
+          }
+          EOF
+
+          if [ "${{ matrix.module_path }}" != "." ]; then
+            cp .output_metadata/run_metadata.json ${{ matrix.module_path }}/.output_metadata/run_metadata.json
+          fi
 
   # ==========================================
   # STEP 1: RUN NONDEX
