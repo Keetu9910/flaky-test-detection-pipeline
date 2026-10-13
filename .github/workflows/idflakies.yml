@@ -38,21 +38,22 @@ jobs:
           repository: ${{ inputs.repo_slug }}
           ref: ${{ inputs.sha }}
 
-      # The target repo owns the workspace root, so the shared actions live in a hidden sub-folder.
-      - name: Checkout Pipeline Actions
+      # The target repo owns the workspace root, so shared actions/scripts live in a hidden sub-folder.
+      - name: Checkout Pipeline Actions and Scripts
         uses: actions/checkout@v4
         with:
           path: .pipeline-tools
-          sparse-checkout: .github/actions
+          sparse-checkout: |
+            .github/actions
+            .github/scripts
           sparse-checkout-cone-mode: false
 
-      - name: Set up Java Environment
-        id: setup-java
-        uses: actions/setup-java@v4
+      - name: Set up Project JDK
+        id: jdk
+        uses: ./.pipeline-tools/.github/actions/detect-java
         with:
-          distribution: 'corretto'
-          java-version-file: '${{ github.workspace }}/${{ inputs.module_path }}/pom.xml'
-          java-version: '8'
+          module-path: ${{ inputs.module_path }}
+          force-java-version: ${{ inputs.force_java_version }}
 
       - name: Save Run Metadata
         uses: ./.pipeline-tools/.github/actions/save-metadata
@@ -61,8 +62,9 @@ jobs:
           sha: ${{ inputs.sha }}
           module-path: ${{ inputs.module_path }}
 
+      # Always runs on Java 8; on Java 11/17 only when the idflakies_java9plus toggle is on.
       - name: Run iDFlakies
-        if: startsWith(steps.setup-java.outputs.version, '8') || startsWith(steps.setup-java.outputs.version, '1.8')
+        if: steps.jdk.outputs.java-version == '8' || inputs.idflakies_java9plus
         continue-on-error: true
         uses: ./.pipeline-tools/.github/actions/run-detector
         with:
