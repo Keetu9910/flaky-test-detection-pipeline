@@ -28,7 +28,7 @@ on:
         type: string
 
 jobs:
-  detect:
+  flakesync:
     runs-on: ubuntu-latest
     timeout-minutes: ${{ fromJson(inputs.max_job_timeout) }}
     steps:
@@ -38,29 +38,28 @@ jobs:
           repository: ${{ inputs.repo_slug }}
           ref: ${{ inputs.sha }}
 
-      - name: Checkout FlakeSync Repository
+      - name: Checkout Pipeline Scripts
         uses: actions/checkout@v4
         with:
-          repository: UT-SE-Research/FlakeSync
-          path: flakesync-repo
+          path: .pipeline-tools
+          sparse-checkout: |
+            .github/scripts
+            .github/actions
+          sparse-checkout-cone-mode: false
 
-      - name: Build FlakeSync Plugin Locally
-        run: |
-          cd flakesync-repo
-          export JAVA_HOME=$JAVA_HOME_8_X64
-          export PATH=$JAVA_HOME/bin:$PATH
-          mvn clean install -U -DskipTests
-
-      - name: Save Run Metadata
-        run: |
-          mkdir -p .output_metadata
-          cat <<EOF > .output_metadata/run_metadata.json
-          {"github_url": "${{ inputs.repo_url }}", "sha": "${{ inputs.sha }}", "module_path": "${{ inputs.module_path }}"}
-          EOF
-          if [ "${{ inputs.module_path }}" != "." ]; then
-            mkdir -p ${{ inputs.module_path }}/.output_metadata
-            cp .output_metadata/run_metadata.json ${{ inputs.module_path }}/.output_metadata/run_metadata.json
-          fi
+      # Builds the FlakeSync plugin (replaces the old checkout + build steps here)
+      - name: Setup Project Under Test
+        id: setup
+        uses: ./.pipeline-tools/.github/actions/setup-project
+        with:
+          repo_slug: ${{ inputs.repo_slug }}
+          sha: ${{ inputs.sha }}
+          module_path: ${{ inputs.module_path }}
+          repo_url: ${{ inputs.repo_url }}
+          force_java_version: ${{ inputs.force_java_version }}
+          max_job_timeout: ${{ inputs.max_job_timeout }}
+          build_idflakies: 'false'
+          build_flakesync: 'true'
 
       - name: Run FlakeSync
         continue-on-error: true
