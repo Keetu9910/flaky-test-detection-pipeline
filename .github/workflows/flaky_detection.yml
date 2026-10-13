@@ -173,22 +173,6 @@ jobs:
             flakesync_td_tests.csv
           retention-days: 7
 
-      # ==========================================
-      # CLEANUP: Delete the 500+ intermediate artifacts
-      # ==========================================
-      - name: Clean up UI (Delete Intermediate Artifacts)
-        uses: geekyeggo/delete-artifact@v5
-        with:
-          name: |
-            idflakies-results-*
-            idflakies_logs_*
-            nondex-results-*
-            nondex_logs_*
-            flakesync-results-*
-            flakesync_logs_*
-          useGlob: true
-          failOnError: false
-
   # ==========================================
   # STEP 5: COMPARE WITH IDOFT DATASET
   # ==========================================
