@@ -1,0 +1,51 @@
+name: Run Maven flaky-test detector
+description: >
+  Pre-compiles the module, then runs one detector plugin and tees its output to
+  logs/TOOL_log.txt inside the module. Failures never fail the step, matching
+  the original workflows.
+
+inputs:
+  tool:
+    description: Short tool name (idflakies, nondex or flakesync), used for the log file name
+    required: true
+  module-path:
+    description: Module path inside the repository, or . for the root
+    required: true
+  mvn-args:
+    description: Plugin goal and tool-specific flags, space separated and without spaces inside a flag
+    required: true
+  job-timeout-minutes:
+    description: >
+      Optional. When set, the detector is wrapped in timeout with a limit of this
+      value minus 5 minutes (minimum 5), leaving time for archiving.
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Run ${{ inputs.tool }}
+      shell: bash
+      working-directory: ${{ inputs.module-path }}
+      env:
+        TOOL: ${{ inputs.tool }}
+        MVN_ARGS: ${{ inputs.mvn-args }}
+        JOB_TIMEOUT: ${{ inputs.job-timeout-minutes }}
+      run: |
+        mkdir -p logs
+        unset MAVEN_OPTS
+
+        SKIPS=(-Dcheckstyle.skip=true -Drat.skip=true -Dmaven.javadoc.skip=true)
+        COMMON=(-B -Dmaven.test.failure.ignore=true -DfailIfNoTests=false "${SKIPS[@]}")
+
+        mvn test-compile -q -B -DskipTests "${SKIPS[@]}" || true
+
+        TIMEOUT_CMD=()
+        if [ -n "$JOB_TIMEOUT" ]; then
+          LIMIT=$(( JOB_TIMEOUT > 5 ? JOB_TIMEOUT - 5 : 5 ))
+          TIMEOUT_CMD=(timeout --foreground "${LIMIT}m")
+        fi
+
+        # MVN_ARGS is intentionally unquoted so it splits into separate arguments
+        # shellcheck disable=SC2086
+        "${TIMEOUT_CMD[@]}" mvn $MVN_ARGS "${COMMON[@]}" 2>&1 | tee "logs/${TOOL}_log.txt" || true
