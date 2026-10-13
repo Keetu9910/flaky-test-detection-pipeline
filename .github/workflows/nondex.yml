@@ -24,6 +24,9 @@ on:
         required: true
         type: string
 
+env:
+  NONDEX_VERSION: '2.2.1'
+
 jobs:
   detect:
     runs-on: ubuntu-latest
