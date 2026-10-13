@@ -57,6 +57,7 @@ jobs:
     needs: prepare
     strategy:
       fail-fast: false
+      max-parallel: 10
       matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
     uses: ./.github/workflows/nondex.yml
     with:
@@ -76,6 +77,7 @@ jobs:
     needs: prepare
     strategy:
       fail-fast: false
+      max-parallel: 10
       matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
     uses: ./.github/workflows/flakesync.yml
     with:
@@ -96,6 +98,7 @@ jobs:
     needs: prepare
     strategy:
       fail-fast: false
+      max-parallel: 10
       matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
     uses: ./.github/workflows/idflakies.yml
     with:
