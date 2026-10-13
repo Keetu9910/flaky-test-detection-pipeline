@@ -145,12 +145,15 @@ jobs:
           module-path: ${{ inputs.module_path }}
 
       - name: Run FlakeSync
+        if: inputs.test_names != ''
         continue-on-error: true
         uses: ./.pipeline-tools/.github/actions/run-detector
         with:
           tool: flakesync
           module-path: ${{ inputs.module_path }}
-          mvn-args: edu.utexas.ece:flakesync-maven-plugin:1.0-SNAPSHOT:detect
+          mvn-args: edu.utexas.ece:flakesync-maven-plugin:1.0-SNAPSHOT:concurrentfind
+          test-names: ${{ inputs.test_names }}
+          job-timeout-minutes: ${{ inputs.max_job_timeout }}
 
       - name: Archive FlakeSync Results and Logs
         if: always()
