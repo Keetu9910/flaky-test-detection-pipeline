@@ -20,6 +20,12 @@ inputs:
       value minus 5 minutes (minimum 5), leaving time for archiving.
     required: false
     default: ""
+  test-names:
+    description: >
+      Optional comma-separated Class#method list. When set, the detector runs once
+      per test with -Dflakesync.testName=<test> appended, all sharing the time limit.
+    required: false
+    default: ""
 
 runs:
   using: composite
@@ -31,6 +37,7 @@ runs:
         TOOL: ${{ inputs.tool }}
         MVN_ARGS: ${{ inputs.mvn-args }}
         JOB_TIMEOUT: ${{ inputs.job-timeout-minutes }}
+        TEST_NAMES: ${{ inputs.test-names }}
       run: |
         mkdir -p logs
         unset MAVEN_OPTS
@@ -46,6 +53,29 @@ runs:
           TIMEOUT_CMD=(timeout --foreground "${LIMIT}m")
         fi
 
-        # MVN_ARGS is intentionally unquoted so it splits into separate arguments
-        # shellcheck disable=SC2086
-        "${TIMEOUT_CMD[@]}" mvn $MVN_ARGS "${COMMON[@]}" 2>&1 | tee "logs/${TOOL}_log.txt" || true
+        if [ -n "$TEST_NAMES" ]; then
+          # One mvn run per test, all sharing the overall time budget
+          : > "logs/${TOOL}_log.txt"
+          IFS=',' read -ra TESTS <<< "$TEST_NAMES"
+          DEADLINE=$(( SECONDS + ${LIMIT:-0} * 60 ))
+          for T in "${TESTS[@]}"; do
+            [ -z "$T" ] && continue
+            TIMEOUT_CMD=()
+            if [ -n "$JOB_TIMEOUT" ]; then
+              REMAINING=$(( DEADLINE - SECONDS ))
+              if [ "$REMAINING" -le 0 ]; then
+                echo "Time budget used up; skipping remaining tests" | tee -a "logs/${TOOL}_log.txt"
+                break
+              fi
+              TIMEOUT_CMD=(timeout --foreground "${REMAINING}s")
+            fi
+            echo "=== ${TOOL}: $T ===" | tee -a "logs/${TOOL}_log.txt"
+            # MVN_ARGS is intentionally unquoted so it splits into separate arguments
+            # shellcheck disable=SC2086
+            "${TIMEOUT_CMD[@]}" mvn $MVN_ARGS -Dflakesync.testName="$T" "${COMMON[@]}" 2>&1 | tee -a "logs/${TOOL}_log.txt" || true
+          done
+        else
+          # MVN_ARGS is intentionally unquoted so it splits into separate arguments
+          # shellcheck disable=SC2086
+          "${TIMEOUT_CMD[@]}" mvn $MVN_ARGS "${COMMON[@]}" 2>&1 | tee "logs/${TOOL}_log.txt" || true
+        fi
