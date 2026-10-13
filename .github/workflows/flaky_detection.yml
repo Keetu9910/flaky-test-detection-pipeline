@@ -133,34 +133,34 @@ jobs:
       - name: Run Aggregator Script
         run: python .github/scripts/aggregate_results.py
 
-      - name: Organize Artifacts into Main Folders
+      - name: Organize Artifacts into Folders
         run: |
-          # 1. Create the two main master folders with subfolders for each tool
-          mkdir -p Main_Logs/idflakies Main_Logs/nondex Main_Logs/flakesync
-          mkdir -p Main_Results/idflakies Main_Results/nondex Main_Results/flakesync
+          # 1. Create the master folders with subfolders for each tool
+          mkdir -p Logs/idflakies Logs/nondex Logs/flakesync
+          mkdir -p Results/idflakies Results/nondex Results/flakesync
 
-          # 2. Copy all raw results into the Main_Results folder
-          cp -r artifacts/*idflakies-results*/* Main_Results/idflakies/ 2>/dev/null || true
-          cp -r artifacts/*nondex-results*/* Main_Results/nondex/ 2>/dev/null || true
-          cp -r artifacts/*flakesync-results*/* Main_Results/flakesync/ 2>/dev/null || true
+          # 2. Move entire uniquely-named result directories into the tool folders
+          mv artifacts/*idflakies-results* Results/idflakies/ 2>/dev/null || true
+          mv artifacts/*nondex-results* Results/nondex/ 2>/dev/null || true
+          mv artifacts/*flakesync-results* Results/flakesync/ 2>/dev/null || true
           
-          # 3. Find and copy all logs into the Main_Logs folder
-          find artifacts -type f -path "*/idflakies_logs_*/*" -exec cp {} Main_Logs/idflakies/ \; || true
-          find artifacts -type f -path "*/nondex_logs_*/*" -exec cp {} Main_Logs/nondex/ \; || true
-          find artifacts -type f -path "*/flakesync_logs_*/*" -exec cp {} Main_Logs/flakesync/ \; || true
+          # 3. Move entire uniquely-named log directories into the tool folders
+          mv artifacts/*idflakies_logs_* Logs/idflakies/ 2>/dev/null || true
+          mv artifacts/*nondex_logs_* Logs/nondex/ 2>/dev/null || true
+          mv artifacts/*flakesync_logs_* Logs/flakesync/ 2>/dev/null || true
 
-      - name: Upload Main Logs
+      - name: Upload Logs
         uses: actions/upload-artifact@v4
         with:
-          name: Main_Logs
-          path: Main_Logs/
+          name: Logs
+          path: Logs/
           retention-days: 7
 
-      - name: Upload Main Results
+      - name: Upload Results
         uses: actions/upload-artifact@v4
         with:
-          name: Main_Results
-          path: Main_Results/
+          name: Results
+          path: Results/
           retention-days: 7
 
       - name: Upload Aggregated Summary CSVs
