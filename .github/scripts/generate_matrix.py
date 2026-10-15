@@ -8,6 +8,7 @@ from urllib.parse import urlparse
 # Suppress pandas / deprecation warnings so they don't print to stdout and corrupt GITHUB_OUTPUT
 warnings.filterwarnings('ignore')
 
+
 # Exact repository tracking sheet URL from the open-source IDoFT dataset
 url = "https://raw.githubusercontent.com/TestingResearchIllinois/idoft/main/pr-data.csv"
 df = pd.read_csv(url)
@@ -37,9 +38,9 @@ else:
     deduped = deduped.iloc[offset:]
 
 matrix_include = []
+
 # Find the test name column dynamically to avoid exact-match spelling errors from IDoFT
 test_col = next((col for col in df.columns if 'Fully-Qualified Test' in col), None)
-
 if not test_col:
     raise ValueError("Could not find the Fully-Qualified Test Name column in the IDoFT CSV!")
 
@@ -57,11 +58,12 @@ for _, row in deduped.iterrows():
     repo_slug = extract_repo_slug(repo_url)
     repo_name = repo_slug.split("/")[-1] if "/" in repo_slug else repo_slug
     sha = row['SHA Detected']
-    
+
+
     # Group by BOTH repo_url and sha to prevent test leaking between overlapping forks/hashes
     matching_rows = df[(df['Project URL'] == repo_url) & (df['SHA Detected'] == sha)]
     raw_tests = matching_rows[test_col].dropna().astype(str).tolist()
-    
+
     # Format test paths with '#' character separating class from method for FlakeSync compatibility
     formatted_tests = []
     for t in raw_tests:
@@ -71,7 +73,7 @@ for _, row in deduped.iterrows():
             formatted_tests.append('.'.join(parts[:-1]) + '#' + parts[-1])
         else:
             formatted_tests.append(t)
-            
+
     # Package into the structure required by the parallel GitHub Actions include matrix
     matrix_include.append({
         "repo_url": repo_url,
