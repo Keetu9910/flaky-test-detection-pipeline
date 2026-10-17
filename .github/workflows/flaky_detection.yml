@@ -153,12 +153,22 @@ jobs:
         if: always()
         run: python3 .github/scripts/merge_rows.py pr-data.csv "collected_rows/*/flaky_rows/*.csv" flaky_tests.csv
 
+      # Per-test FlakeSync report from the Maven logs (delay failure counts, normal-run
+      # baseline, verdict). Does not modify flaky_tests.csv. Never fails the pipeline.
+      - name: FlakeSync report from logs
+        if: always()
+        continue-on-error: true
+        run: python3 .github/scripts/fail_rates_from_logs.py artifacts --out flakesync_failure_rates.csv
+
       - name: Upload merged flaky_tests.csv
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: flaky_tests_csv
-          path: flaky_tests.csv
+          path: |
+            flaky_tests.csv
+            flakesync_failure_rates.csv
+          if-no-files-found: ignore
           retention-days: 7
 
       - name: Organize Artifacts into Folders
