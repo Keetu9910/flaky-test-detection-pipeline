@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       max_projects:
-        description: 'Maximum number of projects to run (leave empty for all)'
+        description: 'Maximum number of projects to run (max 256; leave empty for up to 256)'
         required: false
         default: '5'
       offset:
@@ -23,6 +23,7 @@ on:
         required: false
         type: boolean
         default: true
+
 
 jobs:
   prepare:
