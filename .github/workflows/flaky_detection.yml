@@ -119,7 +119,7 @@ jobs:
   # ==========================================
   aggregate:
     name: Aggregate CSVs
-    needs: [run_idflakies, run_nondex, run_flakesync]
+    needs: [prepare, run_idflakies, run_nondex, run_flakesync]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -158,7 +158,9 @@ jobs:
       - name: Count iDFlakies / NonDex overlap
         if: always()
         continue-on-error: true
-        run: python3 .github/scripts/count_overlap.py flaky_tests.csv
+        env:
+          MATRIX: ${{ needs.prepare.outputs.matrix }}
+        run: python3 .github/scripts/build_error_log.py artifacts flaky_tests.csv
 
       # Per-test FlakeSync report from the Maven logs (delay failure counts, normal-run
       # baseline, verdict). Does not modify flaky_tests.csv. Never fails the pipeline.
@@ -176,6 +178,8 @@ jobs:
             flaky_tests.csv
             flakesync_failure_rates.csv
             overlap_summary.txt
+            error_log.csv
+            error_summary.txt
           if-no-files-found: ignore
           retention-days: 7
 
