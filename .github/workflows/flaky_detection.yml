@@ -238,7 +238,7 @@ jobs:
           path: .
           
       - name: Download Latest IDoFT Dataset (pr-data.csv)
-        run: curl -sSL https://raw.githubusercontent.com/TestingResearchIllinois/idoft/main/pr-data.csv -o pr-data.csv
+        run: curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors https://raw.githubusercontent.com/TestingResearchIllinois/idoft/main/pr-data.csv -o pr-data.csv
         
       - name: Compare with IDoFT Dataset
         run: python .github/scripts/compare_idoft.py
