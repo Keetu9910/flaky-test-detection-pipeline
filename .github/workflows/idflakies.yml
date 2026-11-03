@@ -64,7 +64,7 @@ jobs:
 
       - name: Install Root Project Dependencies
         env:
-         MODULE_PATH: ${{ inputs.module_path }
+         MODULE_PATH: ${{ inputs.module_path }}
         run: mvn clean install -DskipTests -Dmaven.javadoc.skip=true -B -V -fn -pl "$MODULE_PATH" -am
       # Always runs on Java 8; on Java 11/17 only when the idflakies_java9plus toggle is on.
       - name: Run iDFlakies
