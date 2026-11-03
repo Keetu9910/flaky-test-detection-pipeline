@@ -76,7 +76,8 @@ jobs:
   # ==========================================
   run_flakesync:
     name: FlakeSync - ${{ matrix.repo_name }}
-    needs: prepare
+    needs: [prepare, run_idflakies, run_nondex]
+    if: ${{ !cancelled() && needs.prepare.result == 'success'}}
     strategy:
       fail-fast: false
       max-parallel: 10
