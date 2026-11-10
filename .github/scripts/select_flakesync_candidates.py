@@ -55,9 +55,15 @@ N = passed - failed
 
 
 # ---- X and Y: what iDFlakies and NonDex flagged ----
+missing_tools = []
+
+
 def flagged(tool):
     out = set()
-    for p in glob.glob(os.path.join(rows_dir, "**", f"{tool}.csv"), recursive=True):
+    files = glob.glob(os.path.join(rows_dir, "**", f"{tool}.csv"), recursive=True)
+    if not files:
+        missing_tools.append(tool)
+    for p in files:
         with open(p, newline="", errors="ignore") as fh:
             for r in csv.DictReader(fh):
                 if r.get(TEST_COL):
@@ -80,15 +86,25 @@ def mentions_concurrency(test):
     return False
 
 
+# Flagged tests that are not in N cannot be subtracted (they failed or did not run in the
+# baseline, or their names are written differently). Listing them makes that visible.
+not_in_N = sorted((X | Y) - N)
+
 hint = {t: mentions_concurrency(t) for t in Z}
-ranked = sorted(Z, key=lambda t: (not hint[t], t))
-chosen = ranked[:max_tests] if max_tests > 0 else ranked
+# FlakeSync looks for timing-dependent failures, so by default only tests whose class uses
+# threads, executors, latches, sleeps etc. are worth its time. CONCURRENCY_ONLY=false goes back
+# to testing every test in Z (concurrency ones first).
+concurrency_only = os.environ.get("CONCURRENCY_ONLY", "true").lower() != "false"
+pool = sorted(t for t in Z if hint[t]) if concurrency_only else sorted(Z, key=lambda t: (not hint[t], t))
+chosen = pool[:max_tests] if max_tests > 0 else pool
 
 skip_reason = ""
 if not reports:
     skip_reason = "the baseline test run produced no surefire reports, so N is unknown"
-elif not chosen:
+elif not Z:
     skip_reason = "Z is empty: every passing test was already flagged by iDFlakies or NonDex"
+elif not chosen:
+    skip_reason = "no test in Z uses threads/timing (set CONCURRENCY_ONLY=false to test them anyway)"
 
 summary = (f"N (tests passing in a normal run): {len(N)}\n"
            f"X (flagged by iDFlakies):          {len(X)}\n"
@@ -97,7 +113,12 @@ summary = (f"N (tests passing in a normal run): {len(N)}\n"
            f"Z = N - (X or Y):                  {len(Z)}\n"
            f"  of which mention threads/timing: {sum(hint.values())}\n"
            f"FlakeSync will test:               {len(chosen)}"
-           + (f" (capped at {max_tests})" if max_tests and len(Z) > max_tests else "") + "\n"
+           + (f" (capped at {max_tests})" if max_tests and len(pool) > max_tests else "")
+           + (" (threads/timing tests only)" if concurrency_only else "") + "\n"
+           + "".join(f"WARNING: no {t}.csv found, so that tool's flagged tests were not removed\n"
+                     for t in missing_tools)
+           + (f"Flagged but not in N (not subtracted): {len(not_in_N)}\n"
+              + "".join(f"  {t}\n" for t in not_in_N[:20]) if not_in_N else "")
            + (f"Skipped: {skip_reason}\n" if skip_reason else ""))
 log(summary)
 if os.environ.get("GITHUB_STEP_SUMMARY"):
