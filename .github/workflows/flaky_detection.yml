@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       max_projects:
-        description: 'Maximum number of projects to run (leave empty for all)'
+        description: 'Maximum number of projects to run (max 256; leave empty for up to 256)'
         required: false
         default: '5'
       offset:
@@ -23,6 +23,7 @@ on:
         required: false
         type: boolean
         default: true
+
 
 jobs:
   prepare:
@@ -75,7 +76,8 @@ jobs:
   # ==========================================
   run_flakesync:
     name: FlakeSync - ${{ matrix.repo_name }}
-    needs: prepare
+    needs: [prepare, run_idflakies, run_nondex]
+    if: ${{ !cancelled() && needs.prepare.result == 'success'}}
     strategy:
       fail-fast: false
       max-parallel: 10
@@ -117,7 +119,7 @@ jobs:
   # ==========================================
   aggregate:
     name: Aggregate CSVs
-    needs: [run_idflakies, run_nondex, run_flakesync]
+    needs: [prepare, run_idflakies, run_nondex, run_flakesync]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -152,6 +154,13 @@ jobs:
       - name: Merge CSV rows
         if: always()
         run: python3 .github/scripts/merge_rows.py pr-data.csv "collected_rows/*/flaky_rows/*.csv" flaky_tests.csv
+      
+      - name: Count iDFlakies / NonDex overlap
+        if: always()
+        continue-on-error: true
+        env:
+          MATRIX: ${{ needs.prepare.outputs.matrix }}
+        run: python3 .github/scripts/build_error_log.py artifacts flaky_tests.csv
 
       # Per-test FlakeSync report from the Maven logs (delay failure counts, normal-run
       # baseline, verdict). Does not modify flaky_tests.csv. Never fails the pipeline.
@@ -168,6 +177,9 @@ jobs:
           path: |
             flaky_tests.csv
             flakesync_failure_rates.csv
+            overlap_summary.txt
+            error_log.csv
+            error_summary.txt
           if-no-files-found: ignore
           retention-days: 7
 
@@ -238,7 +250,7 @@ jobs:
           path: .
           
       - name: Download Latest IDoFT Dataset (pr-data.csv)
-        run: curl -sSL https://raw.githubusercontent.com/TestingResearchIllinois/idoft/main/pr-data.csv -o pr-data.csv
+        run: curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors https://raw.githubusercontent.com/TestingResearchIllinois/idoft/main/pr-data.csv -o pr-data.csv
         
       - name: Compare with IDoFT Dataset
         run: python .github/scripts/compare_idoft.py

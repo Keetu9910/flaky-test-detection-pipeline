@@ -39,6 +39,12 @@ if max_runs is not None:
     deduped = deduped.iloc[offset : offset + max_runs]
 else:
     deduped = deduped.iloc[offset:]
+# GitHub Actions allows at most 256 jobs per matrix, soooooo no to overloading
+MATRIX_LIMIT = 256
+if len(deduped) > MATRIX_LIMIT:
+    print(f"::warning::Only running the first {MATRIX_LIMIT} projects (GitHub's matrix limit). "
+          f"Use offset={offset + MATRIX_LIMIT} for the next batch.", file=sys.stderr)
+    deduped = deduped.iloc[:MATRIX_LIMIT]
 
 matrix_include = []
 

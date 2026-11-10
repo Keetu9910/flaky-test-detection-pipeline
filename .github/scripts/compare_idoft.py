@@ -32,6 +32,8 @@ if not idoft_df.empty:
     if IDOFT_TEST_COL in idoft_df.columns:
         for url, test in zip(idoft_df['Project URL'], idoft_df[IDOFT_TEST_COL]):
             idoft_keys.add((repo_of(url), norm_test(test)))
+if not idoft_keys:
+    raise SystemExit("ERROR: could not load IDoFT tests from pr-data.csv; refusing to mark every test as unique")
 
 # Load detected data. Each summary names its test column differently.
 idflakies_df = load_data('idflakies_summary.csv')
