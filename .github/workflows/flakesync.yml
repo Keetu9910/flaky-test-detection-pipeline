@@ -126,6 +126,29 @@ jobs:
         env:
           MODULE_PATH: ${{ inputs.module_path }}
         run: mvn clean install -pl "$MODULE_PATH" -am -DskipTests -Dmaven.javadoc.skip=true -Drat.skip=true -Dcheckstyle.skip=true -Denforcer.skip=true -B -V -U
+
+      # 4. Candidate selection: Z = N - (X ∪ Y)
+      - name: Baseline test run (builds N)
+        continue-on-error: true
+        env:
+          MODULE_PATH: ${{ inputs.module_path }}
+        run: mvn test -pl "${MODULE_PATH:-.}" -Dmaven.test.failure.ignore=true -Drat.skip=true -Dcheckstyle.skip=true -Denforcer.skip=true -B
+
+      - name: Download iDFlakies and NonDex rows (X and Y)
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          pattern: rows-*-${{ inputs.repo_name }}-${{ inputs.sha }}
+          path: prior_rows
+
+      - name: Select FlakeSync candidates
+        id: select
+        continue-on-error: true
+        env:
+          MODULE_PATH: ${{ inputs.module_path }}
+          MAX_TESTS: '30'
+        run: python3 .pipeline-tools/.github/scripts/select_flakesync_candidates.py "$MODULE_PATH" prior_rows >> "$GITHUB_OUTPUT"
+
       - name: Save Run Metadata
         uses: ./.pipeline-tools/.github/actions/save-metadata
         with:
@@ -134,14 +157,14 @@ jobs:
           module-path: ${{ inputs.module_path }}
 
       - name: Run FlakeSync
-        if: inputs.test_names != ''
+        if: steps.select.outputs.test_names != ''
         continue-on-error: true
         uses: ./.pipeline-tools/.github/actions/run-detector
         with:
           tool: flakesync
           module-path: ${{ inputs.module_path }}
           mvn-args: edu.utexas.ece:flakesync-maven-plugin:1.0-SNAPSHOT:concurrentfind
-          test-names: ${{ inputs.test_names }}
+          test-names: ${{ steps.select.outputs.test_names }}
           followup-goals: edu.utexas.ece:flakesync-maven-plugin:1.0-SNAPSHOT:delaylocs
           job-timeout-minutes: ${{ inputs.max_job_timeout }}
 
